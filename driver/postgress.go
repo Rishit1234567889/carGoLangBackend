@@ -3,7 +3,7 @@ package driver
 import (
 	"database/sql"
 	"fmt"
-
+	_ "github.com/lib/pq" // The underscore import is important!
 	"log"
 	"os"
 	"time"
