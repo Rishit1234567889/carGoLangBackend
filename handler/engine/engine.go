@@ -2,15 +2,14 @@ package engine
 
 import (
 	"encoding/json"
-	"io/ioutil"
+	"log"
+	"net/http"
 
 	"github.com/google/uuid"
 	"github.com/gorilla/mux"
 	"github.com/rishit1234567889/carZone/models"
 	"github.com/rishit1234567889/carZone/service"
-
-	"log"
-	"net/http"
+	"go.opentelemetry.io/otel"
 )
 
 type EngineHandler struct {
@@ -23,13 +22,20 @@ func NewEngineHandler(service service.EngineServiceInterface) *EngineHandler {
 	}
 }
 
-func (e *EngineHandler) GetEngineByID(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
+func (e *EngineHandler) GetEngineById(w http.ResponseWriter, r *http.Request) {
+	tracer := otel.Tracer("EngineHandler")
+
+	ctx, span := tracer.Start(r.Context(), "GetEngineById-Handler")
+
+	defer span.End()
 	vars := mux.Vars(r)
+
 	id := vars["id"]
 
-	resp, err := e.service.GetEngineByID(ctx, id)
+	resp, err := e.service.GetEngineById(ctx, id)
+
 	if err != nil {
+		span.RecordError(err)
 		w.WriteHeader(http.StatusInternalServerError)
 		log.Println(err)
 		return
@@ -37,6 +43,7 @@ func (e *EngineHandler) GetEngineByID(w http.ResponseWriter, r *http.Request) {
 
 	body, err := json.Marshal(resp)
 	if err != nil {
+		span.RecordError(err)
 		w.WriteHeader(http.StatusInternalServerError)
 		log.Println(err)
 		return
@@ -46,123 +53,128 @@ func (e *EngineHandler) GetEngineByID(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 
 	_, err = w.Write(body)
+
 	if err != nil {
-		log.Println("Error writing response :", err)
+		span.RecordError(err)
+		log.Println("error writing response :", err)
 	}
+
 }
 
 func (e *EngineHandler) CreateEngine(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	body, err := ioutil.ReadAll(r.Body)
+	tracer := otel.Tracer("EngineHandler")
 
-	if err != nil {
-		log.Println("Error reading request body:", err)
-		w.WriteHeader(http.StatusInternalServerError)
-		return
-	}
+	ctx, span := tracer.Start(r.Context(), "CreateEngine-Handler")
 
+	defer span.End()
 	var engineReq models.EngineRequest
-	err = json.Unmarshal(body, &engineReq)
-	if err != nil {
-		log.Println("Error unmarshalling request body:", err)
-		w.WriteHeader(http.StatusBadRequest)
+	if err := json.NewDecoder(r.Body).Decode(&engineReq); err != nil {
+		span.RecordError(err)
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
 	createdEngine, err := e.service.CreateEngine(ctx, &engineReq)
 	if err != nil {
-		log.Println("Error while creating engine : ", err)
-		w.WriteHeader(http.StatusInternalServerError)
+		span.RecordError(err)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	resBody, err := json.Marshal(createdEngine)
+	body, err := json.Marshal(createdEngine)
 	if err != nil {
-		log.Println("error marshalling response:", err)
-		w.WriteHeader(http.StatusInternalServerError)
+		span.RecordError(err)
+		http.Error(w, "Error marshalling  response", http.StatusInternalServerError)
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	_, _ = w.Write(resBody)
+	_, err = w.Write(body)
+	if err != nil {
+		span.RecordError(err)
+		log.Println("Error writing response :", err)
+	}
 }
 
+// UpdateEngine handles PUT requests to update an existing engine.
 func (e *EngineHandler) UpdateEngine(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	params := mux.Vars(r)
-	id := params["id"]
+	tracer := otel.Tracer("EngineHandler")
 
-	body, err := ioutil.ReadAll(r.Body)
-	if err != nil {
-		log.Println("Error reading request body:", err)
-		w.WriteHeader(http.StatusInternalServerError)
-		return
-	}
+	ctx, span := tracer.Start(r.Context(), "UpdateEngine-Handler")
+
+	defer span.End()
+
+	vars := mux.Vars(r)
+	id := vars["id"]
 
 	var engineReq models.EngineRequest
-	err = json.Unmarshal(body, &engineReq)
-	if err != nil {
-		log.Println("Error unmarshalling request body:", err)
-		w.WriteHeader(http.StatusBadRequest)
+	if err := json.NewDecoder(r.Body).Decode(&engineReq); err != nil {
+		span.RecordError(err)
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
-	updatedEngine, err := e.service.UpdateEngine(ctx, id, &engineReq)
+	engineID, err := uuid.Parse(id) // Capture both return values
 	if err != nil {
-		log.Println("Error while updating engine : ", err)
-		w.WriteHeader(http.StatusInternalServerError)
+		span.RecordError(err)
+		http.Error(w, "Invalid ID format", http.StatusBadRequest) // Handle parsing error
 		return
 	}
 
-	resBody, err := json.Marshal(updatedEngine)
+	updatedEngine, err := e.service.UpdateEngine(ctx, engineID, &engineReq)
 	if err != nil {
-		log.Println("error marshalling response:", err)
-		w.WriteHeader(http.StatusInternalServerError)
+		span.RecordError(err)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	body, err := json.Marshal(updatedEngine)
+	if err != nil {
+		span.RecordError(err)
+		http.Error(w, "Error marshalling response", http.StatusInternalServerError)
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusCreated)
-	_, _ = w.Write(resBody)
-
+	w.WriteHeader(http.StatusOK)
+	_, err = w.Write(body)
+	if err != nil {
+		span.RecordError(err)
+		log.Println("Error writing response:", err)
+	}
 }
 
+// DeleteEngine handles DELETE requests to remove an engine by its ID.
 func (e *EngineHandler) DeleteEngine(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
+	tracer := otel.Tracer("EngineHandler")
 
-	params := mux.Vars(r)
-	id := params["id"]
+	ctx, span := tracer.Start(r.Context(), "DeleteEngine-Handler")
+
+	defer span.End()
+
+	vars := mux.Vars(r)
+	id := vars["id"]
 
 	deletedEngine, err := e.service.DeleteEngine(ctx, id)
 	if err != nil {
-		log.Println("Error while deleting engine : ", err)
-		w.WriteHeader(http.StatusInternalServerError)
-		response := map[string]string{"error": "Invalid ID or Engine not found"}
-		jsonResponse, _ := json.Marshal(response)
-		_, _ = w.Write(jsonResponse)
+		span.RecordError(err)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	// check if engine was deleted successfully
-	if deletedEngine.EngineID == uuid.Nil {
-		w.WriteHeader(http.StatusNotFound)
-		response := map[string]string{"error": "Engine not found"}
-		jsonResponse, _ := json.Marshal(response)
-		_, _ = w.Write(jsonResponse)
-		return
-	}
-
-	jsonResponse, err := json.Marshal(deletedEngine)
+	body, err := json.Marshal(deletedEngine)
 	if err != nil {
-		log.Println("Error while marshalling deleted engine response:", err)
-		w.WriteHeader(http.StatusInternalServerError)
-		response := map[string]string{"error": "Internal server error"}
-		jsonResponse, _ := json.Marshal(response)
-		_, _ = w.Write(jsonResponse)
+		span.RecordError(err)
+		http.Error(w, "Error marshalling response", http.StatusInternalServerError)
 		return
 	}
+
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(jsonResponse)
+	_, err = w.Write(body)
+	if err != nil {
+		span.RecordError(err)
+		log.Println("Error writing response:", err)
+	}
 }

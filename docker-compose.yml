@@ -1,25 +1,97 @@
-version: '3.1'
+version: '3.8'
 
 services:
-#  app:
-#    build: .
-#    ports:
-#      - "8080:8080"
-#    depends_on:
-#      - db
-  db:
-    image: postgres:13
+  app:
+    build:
+      context: .  # Specify the build context as a string pointing to the app directory
+      dockerfile: Dockerfile 
+    ports:
+      - "8080:8080"
     environment:
-      POSTGRES_USER: user
+      DB_HOST: db
+      DB_PORT: 5432
+      DB_USER: postgress
+      DB_PASSWORD: password
+      DB_NAME: postgress
+      JAEGER_AGENT_HOST: jaeger
+      JAEGER_AGENT_PORT: 4318
+    depends_on:
+      - db
+      - jaeger
+      - prometheus
+    volumes:
+      - app-logs:/var/log/app
+  
+  db:
+    image: postgres:latest
+    environment:
+      POSTGRES_USER: postgress
       POSTGRES_PASSWORD: password
-      POSTGRES_DB: mydb
+      POSTGRES_DB: postgress
     ports:
       - "5432:5432"
     volumes:
-      - pgdata:/var/lib/postgresql/data
+      - postgress-data:/var/lib/postgresql/data
+
+  jaeger:
+    image: jaegertracing/all-in-one:latest
+    ports: 
+      - "6831:6831/udp"
+      - "4318:4318"
+      - "14268:14268"
+      - "16686:16686"
+
+  prometheus:
+    image: prom/prometheus:latest
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus
+      - loki
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: "admin"
+    volumes:
+      - grafana-data:/var/lib/grafana
+
+  loki:
+    image: grafana/loki:latest
+    container_name: loki
+    ports:
+      - "3100:3100"
+    volumes:
+      - ./loki-config.yaml:/etc/loki/config.yaml
+    user: "0:0"
+    command: -config.file=/etc/loki/config.yaml
+
+
+
+  promtail:
+    image: grafana/promtail:latest
+    container_name: promtail
+    ports:
+      - "9080:9080"
+    volumes:
+      - app-logs:/var/log/app:ro
+      - ./promtail-config.yaml:/etc/promtail/config.yaml
+    command: -config.file=/etc/promtail/config.yaml
+
 
 volumes:
-  pgdata:
+  app-logs:  
+  postgress-data:
+  grafana-data:
+  loki-data:
+
+configs:
+  loki-config:
+    file: ./loki-config.yaml
 
 
-# Golang is running locally and Postgres is running on Docker
+  

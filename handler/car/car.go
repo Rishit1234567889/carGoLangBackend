@@ -2,13 +2,14 @@ package car
 
 import (
 	"encoding/json"
-	"io"
 	"log"
 	"net/http"
 
+	"github.com/google/uuid"
 	"github.com/gorilla/mux"
 	"github.com/rishit1234567889/carZone/models"
 	"github.com/rishit1234567889/carZone/service"
+	"go.opentelemetry.io/otel"
 )
 
 type CarHandler struct {
@@ -21,20 +22,32 @@ func NewCarHandler(service service.CarServiceInterface) *CarHandler {
 	}
 }
 
-func (h *CarHandler) GetCarByID(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
+func (h *CarHandler) GetCarById(w http.ResponseWriter, r *http.Request) {
+	// ctx := r.Context()
+	tracer := otel.Tracer("CarHandler")
+
+	ctx, span := tracer.Start(r.Context(), "GetCarByID-Handler")
+
+	defer span.End()
+
 	vars := mux.Vars(r)
 	id := vars["id"]
 
-	resp, err := h.service.GetCarByID(ctx, id)
+	resp, err := h.service.GetCarById(ctx, id)
+
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
+
+		span.RecordError(err)
+
 		log.Println("Error : ", err)
 		return
 	}
 
 	body, err := json.Marshal(resp)
+
 	if err != nil {
+		span.RecordError(err)
 		w.WriteHeader(http.StatusInternalServerError)
 		log.Println("Error : ", err)
 		return
@@ -43,147 +56,113 @@ func (h *CarHandler) GetCarByID(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 
-	//
+	//write the response body
 	_, err = w.Write(body)
+
 	if err != nil {
-		log.Println("Error writing response: ", err)
+		span.RecordError(err)
+		log.Println("Error Writing Response: ", err)
 	}
 }
 
 func (h *CarHandler) GetCarByBrand(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	brand := r.URL.Query().Get("brand")
+	tracer := otel.Tracer("CarHandler")
+
+	ctx, span := tracer.Start(r.Context(), "GetCarByBrand-Handler")
+
+	defer span.End()
+
+	vars := mux.Vars(r)
+	brand := vars["brand"]
 	isEngine := r.URL.Query().Get("isEngine") == "true"
 
-	resp, err := h.service.GetCarByBrand(ctx, brand, isEngine)
+	cars, err := h.service.GetCarByBrand(ctx, brand, isEngine)
 	if err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
-		log.Println("Error in GetCarByBrand : ", err)
-		return
-	}
-
-	body, err := json.Marshal(resp)
-	if err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
-		log.Println("Error : ", err)
+		span.RecordError(err)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-
-	//
-	_, err = w.Write(body)
-	if err != nil {
-		log.Println("Error writing response: ", err)
-	}
+	json.NewEncoder(w).Encode(cars)
 }
 
 func (h *CarHandler) CreateCar(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
+	tracer := otel.Tracer("CarHandler")
 
-	body, err := io.ReadAll(r.Body)
-	if err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
-		log.Println("Error : ", err)
-		return
-	}
+	ctx, span := tracer.Start(r.Context(), "CreateCar-Handler")
+
+	defer span.End()
 
 	var carReq models.CarRequest
-	err = json.Unmarshal(body, &carReq)
-	if err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
-		log.Println("Error while unmarshalling request body : ", err)
+	if err := json.NewDecoder(r.Body).Decode(&carReq); err != nil {
+		span.RecordError(err)
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
 	createdCar, err := h.service.CreateCar(ctx, &carReq)
 	if err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
-		log.Println("Error in creating car : ", err)
-		return
-	}
-
-	responseBody, err := json.Marshal(createdCar)
-	if err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
-		log.Println("Error while marshalling : ", err)
+		span.RecordError(err)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-
-	// write the response body
-	_, _ = w.Write(responseBody)
+	json.NewEncoder(w).Encode(createdCar)
 }
 
 func (h *CarHandler) UpdateCar(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	params := mux.Vars(r)
-	id := params["id"]
+	tracer := otel.Tracer("CarHandler")
 
-	body, err := io.ReadAll(r.Body)
-	if err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
-		log.Println("Error reading request body : ", err)
-		return
-	}
+	ctx, span := tracer.Start(r.Context(), "UpdateCar-Handler")
+
+	defer span.End()
+	vars := mux.Vars(r)
+	id := vars["id"]
 
 	var carReq models.CarRequest
-	err = json.Unmarshal(body, &carReq)
-	if err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
-		log.Println("Error while unmarshalling request body : ", err)
+	if err := json.NewDecoder(r.Body).Decode(&carReq); err != nil {
+		span.RecordError(err)
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
-	updatedCar, err := h.service.UpdateCar(ctx, id, &carReq)
+	carID, err := uuid.Parse(id) // Capture both return values
 	if err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
-		log.Println("Error in updating car : ", err)
+		span.RecordError(err)
+		http.Error(w, "Invalid ID format", http.StatusBadRequest) // Handle parsing error
 		return
 	}
 
-	responseBody, err := json.Marshal(updatedCar)
+	updatedCar, err := h.service.UpdateCar(ctx, carID, &carReq)
 	if err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
-		log.Println("Error while marshalling response body : ", err)
+		span.RecordError(err)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-
-	// write the response body
-	_, _ = w.Write(responseBody)
+	json.NewEncoder(w).Encode(updatedCar)
 }
 
 func (h *CarHandler) DeleteCar(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	params := mux.Vars(r)
-	id := params["id"]
+	tracer := otel.Tracer("CarHandler")
+
+	ctx, span := tracer.Start(r.Context(), "DeleteCar-Handler")
+
+	defer span.End()
+	vars := mux.Vars(r)
+	id := vars["id"]
 
 	deletedCar, err := h.service.DeleteCar(ctx, id)
 	if err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
-		log.Println("Error while deleting the car : ", err)
-		return
-	}
-
-	body, err := json.Marshal(deletedCar)
-	if err != nil {
-		log.Println("Error while marshalling the response :", err)
-		w.WriteHeader(http.StatusInternalServerError)
+		span.RecordError(err)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-
-	// write the response body
-	_, err = w.Write(body)
-	if err != nil {
-		log.Println("Error writting Response :", err)
-	}
+	json.NewEncoder(w).Encode(deletedCar)
 }
